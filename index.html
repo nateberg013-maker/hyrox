@@ -992,12 +992,14 @@ function unlockAudio(){ const ac=audioCtx(); if(!ac)return;
   if(!window.__acPrimed){ try{ const b=ac.createBuffer(1,1,22050),s=ac.createBufferSource(); s.buffer=b; s.connect(ac.destination); s.start(0); }catch(e){} window.__acPrimed=true; }
 }
 document.addEventListener('touchstart',unlockAudio,{passive:true});
+document.addEventListener('touchend',unlockAudio,{passive:true});
+document.addEventListener('pointerup',unlockAudio);
 document.addEventListener('click',unlockAudio);
 function cue(kind){
   try{ window.__cueCount=(window.__cueCount||0)+1; window.__cueLast=kind; }catch(e){}
   try{ if(navigator.vibrate) navigator.vibrate(kind==='end'?[120,80,120,80,200]:kind==='tick'?60:[100,60,100]); }catch(e){}
-  const ac=audioCtx(); if(!ac) return;
-  try{ if(ac.state==='suspended') ac.resume(); }catch(e){}
+  const ac=audioCtx(); window.__sndState=ac?ac.state:'none'; if(!ac) return;
+  try{ if(ac.state==='suspended') ac.resume().then(function(){ window.__sndState=ac.state; }); }catch(e){}
   const seq = kind==='end' ? [[660,0,.25],[880,.3,.25],[1100,.6,.5],[660,1.25,.25],[880,1.55,.25],[1100,1.85,1.0]]
     : kind==='rest' ? [[880,0,.3],[1100,.35,.8]]
     : kind==='tick' ? [[990,0,.12]]
@@ -1013,6 +1015,13 @@ function cue(kind){
       o.start(t0+p[1]); o.stop(t0+p[1]+p[2]+0.05);
     });
   }catch(e){}
+}
+function testSound(){
+  unlockAudio();
+  const ac=audioCtx();
+  if(ac&&ac.state==='suspended'){ try{ ac.resume().then(function(){ cue('end'); toast('Audio engine: '+ac.state); }); }catch(e){} }
+  cue('end');
+  toast('Audio engine: '+(ac?ac.state:'UNAVAILABLE'));
 }
 function toast(msg){
   const t=document.createElement('div'); t.className='hx-toast'; t.textContent=msg;
@@ -1088,7 +1097,7 @@ function btTick(){
   document.querySelectorAll('[data-bt]').forEach(function(el){ if(el.getAttribute('data-bt')===st.key) el.textContent=fmtClock(t); });
   const b=liveBar();
   const g=st.paused?'paused':blockGuidance(st,t);
-  b.textContent='⏱ '+fmtClock(t)+(g?' · '+g:'');
+  b.textContent=(window.__sndState&&window.__sndState!=='running'?'🔇 ':'')+'⏱ '+fmtClock(t)+(g?' · '+g:'');
   b.style.display='block';
 }
 setInterval(btTick,500);
@@ -1302,6 +1311,7 @@ function render(){
     <button class="act-btn" onclick="openEditSheet()">✏️ Edit workout</button>
     <button class="act-btn skip" onclick="skipDay('${curDate}')">⏭ Skip day — shift plan forward</button>
     <button class="act-btn" onclick="toggleUserDeload()">🪫 Deload this week</button>
+    <button class="act-btn" onclick="testSound()">🔊 Test sound</button>
     <button class="act-btn" onclick="exportData()">⬇ Export log data</button>
     <label class="act-btn" style="text-align:center;cursor:pointer">⬆ Import data<input type="file" accept="application/json" style="display:none" onchange="importData(event)"></label></div>`;
 
