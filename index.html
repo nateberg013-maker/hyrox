@@ -455,8 +455,7 @@ function specFor(ex, extra) {
 function exerciseCard(ex, key, extra, inBlk) {
   if (ex.type==='note' || /^Note — /.test(ex.text)) return `<div class="note-card">${esc(ex.text)}</div>`;
   const spec = specFor(ex, extra || 0);
-  const restBar = (spec.mode === 'sets' && !inBlk)
-    ? `<div class="rest-bar" id="${key}-rest"><span class="rest-label">⏱ rest</span><button class="rest-start" onclick="startRest('${key}')">Start</button></div>` : '';
+  const restBar = '';
   return `<div class="ex-card" id="card-${key}" data-key="${key}">
     <div class="ex-header" onclick="toggleCard('${key}')">
       <div class="check-box">${CHK}</div>
@@ -500,9 +499,7 @@ function blockHeaderCard(ex,key){
   let inputs='';
   if(kind==='amrap') inputs='<div class="block-inputs"><button class="bt-btn" style="min-width:40px" onclick="bumpRounds(\''+key+'\',-1)">−</button><label>Rounds</label><input class="set-input" style="max-width:70px" inputmode="numeric" id="'+key+'-1-r" '+dataAttr(key,'1','r',false)+'><button class="bt-btn" style="font-weight:700" onclick="bumpRounds(\''+key+'\',1)">+1 round</button><label>+ reps</label><input class="set-input" style="max-width:70px" inputmode="numeric" id="'+key+'-2-r" '+dataAttr(key,'2','r',false)+'></div>';
   if(kind==='fortime') inputs='<div class="block-inputs"><label>Time</label><input class="set-input" style="max-width:90px" inputmode="numeric" placeholder="mm:ss" id="'+key+'-1-t" '+dataAttr(key,'1','t',true)+'></div>';
-  const timerRow = (kind==='fortime')
-    ? '<div class="bt-row"><span class="bt-time" data-bt="'+key+'">0:00</span><button class="bt-btn" onclick="btStart(\''+key+'\',\'up\',0)">Start</button><button class="bt-btn" onclick="btStop(\''+key+'\')">Stop</button><button class="bt-btn" onclick="btReset(\''+key+'\',0)">Reset</button></div>'
-    : '<div class="bt-row"><span class="bt-time" data-bt="'+key+'">'+fmtClock(b.seconds||0)+'</span><button class="bt-btn" onclick="btStart(\''+key+'\',\'down\','+(b.seconds||0)+')">Start</button><button class="bt-btn" onclick="btPause(\''+key+'\')">Pause</button><button class="bt-btn" onclick="btReset(\''+key+'\','+(b.seconds||0)+')">Reset</button></div>';
+  const timerRow='';
   return '<div class="block-card" data-key="'+key+'"><div class="block-kind">'+kindLbl+'</div><div class="block-title">'+esc(ex.text)+'</div>'+timerRow+inputs+'</div>';
 }
 function renderSession(day, which, extras) {
@@ -833,11 +830,36 @@ function getDay(){
 }
 
 // ── handlers ──
+function commitShown(key,d,spec,subs){
+  d.s=d.s||{};
+  subs.forEach(function(sub){
+    ['r','w','t'].forEach(function(f){
+      var inp=document.getElementById(key+'-'+sub+'-'+f);
+      if(inp&&inp.value!==''){ d.s[sub]=d.s[sub]||{}; d.s[sub][f]=inp.value; }
+    });
+  });
+  ['dist','time','cal'].forEach(function(f){
+    var inp=document.getElementById(key+'-m-'+f);
+    if(inp&&inp.value!==''){ d.m=d.m||{}; d.m[f]=inp.value; }
+  });
+}
+function lastExact(exText){
+  window.__histCache=window.__histCache||{};
+  for(var i=1;i<=180;i++){
+    var cd=addDays(curDate,-i); if(cd<PLAN_MIN) break;
+    var log=window.__histCache[cd];
+    if(log===undefined){ try{ log=JSON.parse(localStorage.getItem('hx4-'+cd)||'null'); }catch(e){ log=null; } window.__histCache[cd]=log; }
+    if(!log) continue;
+    for(var k in log){ var e=log[k]; if(e&&e.name===exText&&e.s) return e.s; }
+  }
+  return null;
+}
 function toggleCard(key){
   const ex = curKeyEx[key]; if(!ex) return;
   const d = ensure(key); const spec = specFor(ex, d.extra||0); const subs = setSubKeys(spec);
   const v = !d.checked; d.checked = v; d.name = ex.text;
   if(subs.length) d.sc = setAllChecks(subs, v);
+  if(v) commitShown(key,d,spec,subs.length?subs:[]);
   saveDay(); render();
 }
 function toggleSet(key, sub){
@@ -845,6 +867,7 @@ function toggleSet(key, sub){
   const d = ensure(key); const spec = specFor(ex, d.extra||0); const subs = setSubKeys(spec);
   d.sc = d.sc || {}; d.sc[sub] = !d.sc[sub]; d.name = ex.text;
   d.checked = allSetsChecked(d.sc, subs);
+  if(d.sc[sub]) commitShown(key,d,spec,[sub]);
   saveDay(); render();
 }
 function addSet(key){
@@ -924,190 +947,34 @@ function fmtLastLogged(ll){
 }
 
 // ── rest timer ──
-function startRest(key){
-  const ex=curKeyEx[key]; if(!ex) return;
-  const d=dayData[key]||{}; const spec=specFor(ex,d.extra||0);
-  const secs=restSeconds(spec, ex.text); if(secs<=0) return;
-  openTimer(secs);
-}
-function openTimer(total,resumeEndAt){
-  closeTimer();
-  const ov=document.createElement('div'); ov.className='timer-ov'; ov.id='timer-ov';
-  ov.innerHTML='<div class="timer-card">'
-    +'<div class="timer-ring" id="t-ring"><div class="timer-num" id="t-num"></div></div>'
-    +'<div class="timer-btns"><button onclick="skipTimer()">Skip</button><button class="primary" onclick="closeTimer()">Done</button></div>'
-    +'</div>';
-  document.body.appendChild(ov);
-  const endAt=resumeEndAt||(Date.now()+total*1000);
-  try{ localStorage.setItem('hx4-resttimer',JSON.stringify({endAt:endAt,total:total})); }catch(e){}
-  const calc=function(){ return Math.max(0,Math.round((endAt-Date.now())/1000)); };
-  let remaining=calc();
-  const paint=function(){
-    const frac=remaining/total;
-    const deg=Math.max(0,frac)*360;
-    let col = frac>0.5 ? '#34d399' : frac>0.2 ? '#fbbf24' : '#f87171';
-    const ring=document.getElementById('t-ring'); if(!ring) return;
-    ring.style.background='conic-gradient('+col+' '+deg+'deg, #222228 '+deg+'deg)';
-    const m=Math.floor(remaining/60), s=remaining%60;
-    document.getElementById('t-num').textContent = m>0 ? (m+':'+String(s).padStart(2,'0')) : String(s);
-  };
-  paint();
-  const step=function(){ remaining=calc(); paint();
-    if(remaining<=0){ clearInterval(timer); timer=null; try{ localStorage.removeItem('hx4-resttimer'); }catch(e){} timerDone('rest'); } };
-  window.__timerResync=step;
-  timer=setInterval(step,500);
-}
-function timerDone(kind){ cue(kind==='rest'?'rest':'end'); }
-function skipTimer(){ try{ localStorage.removeItem('hx4-resttimer'); }catch(e){} closeTimer(); }
+
+
+
+
 // ── block timer: wall-clock based, survives app-switching; state persisted ──
 const BT_KEY='hx4-blocktimer';
-function btGet(){ try{return JSON.parse(localStorage.getItem(BT_KEY)||'null');}catch(e){return null;} }
-function btSet(s){ try{ if(s) localStorage.setItem(BT_KEY, JSON.stringify(s)); else localStorage.removeItem(BT_KEY);}catch(e){} }
+
+
 function fmtClock(t){ t=Math.max(0,Math.round(t)); const m=Math.floor(t/60), s=t%60; return m+':'+String(s).padStart(2,'0'); }
-function btStart(key,mode,secs){
-  const st=btGet();
-  if(st && st.key===key && st.paused){
-    if(st.mode==='down') st.endAt=Date.now()+st.left*1000; else st.startAt=Date.now()-st.left*1000;
-    st.paused=false; btSet(st); btTick(); return;
-  }
-  btSet({key,mode,secs:secs||0,startAt:Date.now(),endAt:mode==='down'?Date.now()+(secs||0)*1000:null,paused:false,left:null});
-  btTick();
-}
-function btPause(key){ const st=btGet(); if(!st||st.key!==key||st.paused)return;
-  st.left = st.mode==='down' ? Math.max(0,(st.endAt-Date.now())/1000) : (Date.now()-st.startAt)/1000;
-  st.paused=true; btSet(st); btTick(); }
-function btStop(key){ const st=btGet(); if(!st||st.key!==key)return;
-  const el = st.paused ? st.left : (Date.now()-st.startAt)/1000;
-  const inp=document.getElementById(key+'-1-t');
-  if(inp){ inp.value=fmtClock(el); inp.dispatchEvent(new Event('input',{bubbles:true})); }
-  btSet(null); btTick(); }
-function btReset(key,secs){ const st=btGet(); if(st&&st.key===key) btSet(null);
-  const d=document.querySelector('[data-bt="'+key+'"]'); if(d) d.textContent=fmtClock(secs||0); }
+
+
+
+
 
 // ── TIMER V2: audio engine + live guidance (2026-10-16) ──
-let __ac=null,__liveKey=null,__liveIdx=-1;
-function audioCtx(){ if(!__ac){ try{ __ac=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ __ac=null; } } return __ac; }
-function unlockAudio(){ let ac=audioCtx(); if(!ac)return;
-  if(ac.state==='closed'){ __ac=null; ac=audioCtx(); if(!ac)return; }
-  const replay=function(){ window.__sndState=ac.state; if(window.__pendingCue&&ac.state==='running'){ const k=window.__pendingCue; window.__pendingCue=null; cue(k); } };
-  if(ac.state!=='running'){ try{ ac.resume().then(replay).catch(function(){}); }catch(e){} }
-  else replay();
-  if(!window.__acPrimed){ try{ const b=ac.createBuffer(1,1,22050),s=ac.createBufferSource(); s.buffer=b; s.connect(ac.destination); s.start(0); }catch(e){} window.__acPrimed=true; }
-}
-document.addEventListener('touchstart',unlockAudio,{passive:true});
-document.addEventListener('touchend',unlockAudio,{passive:true});
-document.addEventListener('pointerup',unlockAudio);
-document.addEventListener('click',unlockAudio);
-function cue(kind){
-  try{ window.__cueCount=(window.__cueCount||0)+1; window.__cueLast=kind; }catch(e){}
-  try{ if(navigator.vibrate) navigator.vibrate(kind==='end'?[120,80,120,80,200]:kind==='tick'?60:[100,60,100]); }catch(e){}
-  const ac=audioCtx(); window.__sndState=ac?ac.state:'none'; if(!ac) return;
-  if(ac.state!=='running'){ window.__pendingCue=window.__pendingCue||kind;
-    try{ ac.resume().then(function(){ window.__sndState=ac.state; }).catch(function(){}); }catch(e){} }
-  const seq = kind==='end' ? [[880,0,.28],[1100,.32,.28],[880,.64,.28],[1100,.96,.28],[880,1.28,.28],[1320,1.6,1.0]]
-    : kind==='rest' ? [[1100,0,.3],[1320,.35,.8]]
-    : kind==='tick' ? [[1320,0,.15],[1320,.22,.15]]
-    : [[770,0,.12],[770,.2,.12]];
-  try{
-    const t0=ac.currentTime+0.02;
-    seq.forEach(function(p){ const o=ac.createOscillator(),g=ac.createGain();
-      o.type=(kind==='catchup')?'sine':'square'; o.frequency.value=p[0];
-      g.gain.setValueAtTime(0.0001,t0+p[1]);
-      g.gain.exponentialRampToValueAtTime(kind==='catchup'?0.5:(kind==='tick'?0.85:1.0),t0+p[1]+0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001,t0+p[1]+p[2]);
-      o.connect(g); g.connect(ac.destination);
-      o.start(t0+p[1]); o.stop(t0+p[1]+p[2]+0.05);
-    });
-  }catch(e){}
-}
-function testSound(){
-  unlockAudio();
-  const ac=audioCtx();
-  if(ac&&ac.state==='suspended'){ try{ ac.resume().then(function(){ cue('end'); toast('Audio engine: '+ac.state); }); }catch(e){} }
-  cue('end');
-  toast('Audio engine: '+(ac?ac.state:'UNAVAILABLE'));
-}
-function toast(msg){
-  const t=document.createElement('div'); t.className='hx-toast'; t.textContent=msg;
-  document.body.appendChild(t);
-  setTimeout(function(){ t.style.opacity='0'; setTimeout(function(){ t.remove(); },600); },3500);
-}
-function restoreRest(){
-  let st=null; try{ st=JSON.parse(localStorage.getItem('hx4-resttimer')||'null'); }catch(e){}
-  if(!st||!st.endAt) return;
-  const rem=(st.endAt-Date.now())/1000;
-  if(rem>0.5){ if(!document.getElementById('timer-ov')) openTimer(st.total,st.endAt); }
-  else{
-    try{ localStorage.removeItem('hx4-resttimer'); }catch(e){}
-    const ago=Math.round(-rem);
-    if(ago<3600){ cue('catchup'); toast('Rest ended '+(ago>=60?Math.floor(ago/60)+' min '+(ago%60)+' sec':ago+' sec')+' ago'); }
-  }
-}
-function liveBar(){ let b=document.getElementById('live-bar');
-  if(!b){ b=document.createElement('div'); b.id='live-bar';
-    b.onclick=function(){ const st=btGet(); if(!st)return; const el=document.querySelector('[data-bt="'+st.key+'"]'); if(el)el.scrollIntoView({behavior:'smooth',block:'center'}); };
-    document.body.appendChild(b); }
-  return b; }
-function hideLive(){ const b=document.getElementById('live-bar'); if(b)b.style.display='none';
-  document.querySelectorAll('.live-now').forEach(function(e){ e.classList.remove('live-now'); }); }
-function blockGuidance(st,t){
-  const ex=curKeyEx[st.key]; const total=st.secs||0;
-  const elapsed=st.mode==='down'?Math.max(0,total-t):t;
-  let g='',boundarySec=0,idx=0,m;
-  if(ex&&ex.block){
-    const txt=ex.text||'';
-    if(m=txt.match(/^EMOM (\d+) — (\d+)-station/)){
-      const minute=Math.min(Math.floor(elapsed/60)+1,+m[1]);
-      const stn=((minute-1)%(+m[2]))+1;
-      g='Min '+minute+'/'+m[1]+' · station '+stn;
-      boundarySec=60; idx=Math.floor(elapsed/60);
-      document.querySelectorAll('.live-now').forEach(function(e){ e.classList.remove('live-now'); });
-      const km=st.key.match(/^([ap])(\d+)$/);
-      if(km){ const mc=document.getElementById('card-'+km[1]+(+km[2]+stn)); if(mc)mc.classList.add('live-now'); }
-    } else if(/^Death by/i.test(txt)){
-      const minute=Math.floor(elapsed/60)+1;
-      g='Min '+minute+' — '+(2*minute)+' reps due';
-      boundarySec=60; idx=Math.floor(elapsed/60);
-    } else if(m=txt.match(/Every (\d+) min for (\d+) min \((\d+) (windows|rounds)\)/)){
-      const win=+m[1]*60;
-      const wi=Math.min(Math.floor(elapsed/win)+1,+m[3]);
-      g=(m[4]==='windows'?'Window ':'Round ')+wi+'/'+m[3]+' · '+fmtClock(win-(elapsed%win))+' left in it';
-      boundarySec=win; idx=Math.floor(elapsed/win);
-    } else if(/^AMRAP/i.test(txt)){
-      const inp=document.getElementById(st.key+'-1-r');
-      g='Rounds: '+(inp?(parseInt(inp.value,10)||0):0);
-    }
-  }
-  if(boundarySec){
-    if(__liveKey!==st.key){ __liveKey=st.key; __liveIdx=idx; }
-    else if(idx>__liveIdx){ cue(idx>__liveIdx+1?'catchup':'tick'); __liveIdx=idx; }
-  } else if(__liveKey!==st.key){ __liveKey=st.key; __liveIdx=-1; }
-  return g;
-}
 
-function btTick(){
-  const st=btGet();
-  if(!st){ hideLive(); return; }
-  let t;
-  if(st.paused) t=st.left;
-  else if(st.mode==='down'){
-    t=(st.endAt-Date.now())/1000;
-    if(t<=0){
-      document.querySelectorAll('[data-bt]').forEach(function(el){ if(el.getAttribute('data-bt')===st.key) el.textContent='0:00'; });
-      btSet(null); hideLive(); timerDone('end'); return;
-    }
-  }
-  else t=(Date.now()-st.startAt)/1000;
-  document.querySelectorAll('[data-bt]').forEach(function(el){ if(el.getAttribute('data-bt')===st.key) el.textContent=fmtClock(t); });
-  const b=liveBar();
-  const g=st.paused?'paused':blockGuidance(st,t);
-  b.textContent=(window.__sndState&&window.__sndState!=='running'?'🔇 ':'')+'⏱ '+fmtClock(t)+(g?' · '+g:'');
-  b.style.display='block';
-}
-setInterval(btTick,500);
-document.addEventListener('visibilitychange',function(){ if(!document.hidden){ try{unlockAudio();}catch(e){} btTick(); restoreRest(); if(window.__timerResync&&timer) window.__timerResync(); } });
-window.addEventListener('pageshow',function(){ btTick(); restoreRest(); if(window.__timerResync&&timer) window.__timerResync(); });
-function closeTimer(){ try{ localStorage.removeItem('hx4-resttimer'); }catch(e){} if(timer){ clearInterval(timer); timer=null; } const ov=document.getElementById('timer-ov'); if(ov) ov.remove(); }
+
+
+
+
+
+
+
+
+
+
+
+
 
 // ── info sheet ──
 function explFor(name){
@@ -1158,7 +1025,7 @@ function goToday(){ curDate=clampDate(localDateStr()); dayData=loadDay(); applyD
 function onDatePicked(v){ if(v){ curDate=clampDate(v); dayData=loadDay(); applyDefaultView(); render(); } }
 function openPicker(){ const i=document.getElementById('date-input'); if(i){ try{ if(i.showPicker) i.showPicker(); }catch(e){ i.focus(); } } }
 function clampDate(d){ return d<PLAN_MIN?PLAN_MIN : d>PLAN_MAX?PLAN_MAX : d; }
-function resetDay(){ localStorage.removeItem(dayKey(curDate)); dayData={}; render(); }
+function resetDay(){ if(!confirm('Erase everything logged on this day? This cannot be undone.'))return; localStorage.removeItem(dayKey(curDate)); dayData={}; render(); }
 function setView(v){ view=v; render(); }
 
 // ── edit system ──
@@ -1270,6 +1137,7 @@ function deloadTransform(day){
   return cp;
 }
 function render(){
+  window.__histCache={};
   let day=getDay();
   const __udl = day && udlHas(day.w);
   if(__udl) day=deloadTransform(day);
@@ -1315,7 +1183,6 @@ function render(){
     <button class="act-btn" onclick="openEditSheet()">✏️ Edit workout</button>
     <button class="act-btn skip" onclick="skipDay('${curDate}')">⏭ Skip day — shift plan forward</button>
     <button class="act-btn" onclick="toggleUserDeload()">🪫 Deload this week</button>
-    <button class="act-btn" onclick="testSound()">🔊 Test sound</button>
     <button class="act-btn" onclick="exportData()">⬇ Export log data</button>
     <label class="act-btn" style="text-align:center;cursor:pointer">⬆ Import data<input type="file" accept="application/json" style="display:none" onchange="importData(event)"></label></div>`;
 
@@ -1328,7 +1195,6 @@ function render(){
       ['r','w','t'].forEach(f=>{ if(s&&s[f]!=null&&s[f]!==''){ const inp=document.getElementById(key+'-'+sub+'-'+f); if(inp) inp.value=s[f]; } });
     });
   });
-  btTick();
 }
 
 function hydrate(){
@@ -1353,6 +1219,14 @@ function hydrate(){
       const ca=document.getElementById(key+'-m-cal'); if(ca&&d.m.cal!=null) ca.value=d.m.cal; }
     // rest label
     const rl=card.querySelector('.rest-label'); if(rl){ const secs=restSeconds(spec,ex.text); rl.textContent='⏱ '+fmtRest(secs)+' rest between sets'; }
+    // weight prefill from the last identical prescription (display-only until checked)
+    if(spec.mode==='sets'&&spec.weighted){
+      const hist=lastExact(ex.text);
+      if(hist){ setSubKeys(spec).forEach(function(sub){
+        const wi=document.getElementById(key+'-'+sub+'-w');
+        if(wi&&wi.value===''&&hist[sub]&&hist[sub].w!=null&&hist[sub].w!=='') wi.value=hist[sub].w;
+      }); }
+    }
     // remove-set button visibility
     if(d&&d.extra>0){ const rm=card.querySelector('.mini-btn.rm'); if(rm) rm.style.display=''; }
     // factual last-logged line for lifts (replaces the old suggestion chip)
@@ -1377,7 +1251,7 @@ const PHASE_COLORS={
 function phaseStyle(p){ const c=PHASE_COLORS[p]||['rgba(144,144,160,.16)','#9090a0']; return `background:${c[0]};color:${c[1]}`; }
 
 // ── boot ──
-function boot(){ skips=loadSkips(); curDate=clampDate(localDateStr()); dayData=loadDay(); applyDefaultView(); render(); restoreRest(); }
+function boot(){ skips=loadSkips(); curDate=clampDate(localDateStr()); dayData=loadDay(); applyDefaultView(); render(); }
 if(typeof document!=='undefined' && document.getElementById('app')) boot();
 else if(typeof document!=='undefined') document.addEventListener('DOMContentLoaded',boot);
 if(typeof module!=='undefined') module.exports={ boot, render, toggleCard, toggleSet, getDay,
